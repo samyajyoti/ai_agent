@@ -1,0 +1,49 @@
+# Standalone compose for the AI Ops Agent.
+#
+# To run it next to the insurance-api stack on the SAME network, either:
+#   1. Add this service into docker/dev/compose.yml or docker/prod/compose.yml, or
+#   2. Run both stacks and join networks via `--project-name` + an external network.
+#
+# By default this file runs the agent on its own bridge network and tails the
+# host's Docker daemon via /var/run/docker.sock (which gives it visibility into
+# every container, including the insurance-api ones).
+
+services:
+  ai-ops-agent:
+    container_name: ai-ops-agent
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ai-ops-agent:latest
+    env_file:
+      - .env
+    environment:
+      AI_AGENT_HEALTH_PORT: "8787"
+    ports:
+      - "8787:8787"           # /health and /metrics
+    volumes:
+      # Read-only by default. Switch to rw if you enable restart_container / prune_logs.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config.yaml:/app/config.yaml:ro
+      - ./incidents.jsonl:/app/incidents.jsonl
+      # Optional: bind-mount nginx logs from the host for file-based tails.
+      # - /var/log/nginx:/var/log/nginx:ro
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8787/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: 3

@@ -1,0 +1,45 @@
+# AI Ops Agent configuration.
+# Copy to config.yaml and edit for your environment.
+
+sources:
+  # Docker container logs. Each entry tails one container.
+  docker:
+    - name: insurance-api
+      container: insurance-api-dev
+      kind: api          # api | nginx | generic
+    - name: insurance-redis
+      container: insurance-redis
+      kind: generic
+
+  # Plain file tails (e.g. nginx access/error logs bind-mounted from the host).
+  files:
+    - name: nginx-access
+      path: /var/log/nginx/access.log
+      kind: nginx_access
+    - name: nginx-error
+      path: /var/log/nginx/error.log
+      kind: nginx_error
+
+# Anomaly detection thresholds. Tune for your traffic profile.
+detector:
+  # Rolling window length in seconds used for rate calculations.
+  window_seconds: 60
+
+  # Trigger an incident when 5xx rate from nginx exceeds this fraction.
+  nginx_5xx_rate_threshold: 0.05
+
+  # Trigger when there are >= N API errors in the window.
+  api_error_count_threshold: 10
+
+  # Trigger when p95 upstream latency (nginx $upstream_response_time)
+  # exceeds this many seconds.
+  nginx_p95_latency_seconds: 2.5
+
+  # Patterns that always trigger an incident (regex, case-insensitive).
+  critical_patterns:
+    - "panic"
+    - "out of memory"
+    - "segmentation fault"
+    - "database is not available"
+    - "ECONNREFUSED"
+    - "deadlock detected"
