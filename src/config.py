@@ -65,9 +65,35 @@ class DetectorConfig(BaseModel):
     critical_patterns: list[str] = Field(default_factory=list)
 
 
+class DependencyRule(BaseModel):
+    """Map error keywords / health-subsystem names to a container to restart."""
+
+    label: str                                  # e.g. "RabbitMQ"
+    container: str                              # docker container name to restart
+    keywords: list[str] = Field(default_factory=list)  # case-insensitive regex/substrings
+
+
+class PolicyConfig(BaseModel):
+    """Deterministic, rule-based diagnoser. Used when LLM_PROVIDER=none, and
+    also as the fallback whenever the LLM is unavailable.
+
+    ``api_container`` is the container that runs the API itself; it's the
+    default restart target if no dependency rule matches a failure.
+
+    ``default_action`` is what to do when nothing matches:
+      * restart_api  -> restart_container on api_container
+      * notify_only  -> just alert humans
+    """
+
+    api_container: str | None = None
+    default_action: Literal["restart_api", "notify_only"] = "notify_only"
+    dependencies: list[DependencyRule] = Field(default_factory=list)
+
+
 class YamlConfig(BaseModel):
     sources: Sources = Field(default_factory=Sources)
     detector: DetectorConfig = Field(default_factory=DetectorConfig)
+    policy: PolicyConfig = Field(default_factory=PolicyConfig)
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,55 @@ notify).
 Everything is **dry-run by default**. Nothing destructive happens until you
 explicitly turn it on per action.
 
+## AI-free mode (deterministic, rule-based)
+
+Don't want to use an LLM at all? Set `LLM_PROVIDER=none` and define a
+`policy:` block in `config.yaml`. The agent will then:
+
+1. Detect failures the same way (health check, error bursts, 5xx, latency).
+2. Match the failure against your rules (regex/substring on failing
+   subsystem names + log excerpt).
+3. Restart the matched dependency's container, or fall back to restarting
+   the API container.
+4. Post the incident to Slack and append it to `incidents.jsonl`.
+
+`.env`:
+
+```env
+LLM_PROVIDER=none
+DRY_RUN=false
+ALLOWED_ACTIONS=notify_only,restart_container
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...
+```
+
+`config.yaml`:
+
+```yaml
+policy:
+  api_container: demtest2-api
+  default_action: restart_api          # restart_api | notify_only
+  dependencies:
+    - label: RabbitMQ
+      container: demtest2-rabbitmq
+      keywords: ["rabbitmq", "amqp", "RabbitMQHealthCheck"]
+    - label: Redis
+      container: demtest2-redis
+      keywords: ["redis", "ECONNREFUSED.*:6379"]
+    - label: PostgreSQL
+      container: demtest2-postgres
+      keywords: ["postgres", "DatabaseBackend", "could not connect to server"]
+```
+
+The same policy is also used as the safety net when an LLM is configured
+but unavailable (quota exceeded, network issue, etc.), so the agent keeps
+acting even when the model is down.
+
+See `config.demtest2.yaml` for a ready-to-use preset that monitors
+`testodsy.wrtual.in/getHealth/` and routes RabbitMQ / Redis / Postgres /
+disk / memory failures to the right containers.
+
+---
+
 ## Monitor just one app (simplest setup)
 
 ```bash
@@ -205,6 +254,26 @@ uncomment the bind-mount, e.g.:
 volumes:
   - /var/log/nginx:/var/log/nginx:ro
 ```
+
+### OpenAI returns `insufficient_quota` / 429
+
+```
+openai.RateLimitError: Error code: 429 - {'error': {'code': 'insufficient_quota', ...}}
+```
+
+This means your API key is valid but the account has no remaining credit.
+The agent now detects this, falls back to its heuristic diagnoser, and pauses
+LLM calls for 10 minutes so it doesn't spam the API. To restore full LLM
+analysis:
+
+1. Add credit at https://platform.openai.com/settings/organization/billing/overview
+2. Or switch provider: in `.env` set `LLM_PROVIDER=anthropic` (with
+   `ANTHROPIC_API_KEY`) or `LLM_PROVIDER=none` to run permanently in
+   heuristic-only mode.
+3. Restart the agent: `docker compose restart ai-ops-agent`.
+
+The same circuit-breaker logic kicks in for `invalid_api_key`,
+`permission_denied`, and similar non-retryable errors.
 
 ### HTTP health source reports `non_json` or `transport_error`
 

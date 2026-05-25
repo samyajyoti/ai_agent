@@ -9,12 +9,24 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
 from .config import RuntimeConfig
 
 log = logging.getLogger(__name__)
+
+# Errors that mean "stop calling this provider" — retrying won't help.
+_HARD_FAIL_SUBSTRINGS = (
+    "insufficient_quota",
+    "invalid_api_key",
+    "incorrect api key",
+    "permission_denied",
+    "account_deactivated",
+    "credit balance is too low",
+)
 
 
 @dataclass(slots=True)
@@ -138,6 +150,111 @@ class AnthropicClient:
         return _parse_diagnosis(text)
 
 
+class ResilientLLMClient:
+    """Wraps a real provider with retries, circuit-breaker, and heuristic fallback.
+
+    Behavior:
+      * Transient errors (5xx, generic 429, connection) -> retry up to 2 times
+        with backoff, then return a heuristic diagnosis tagged as 'llm_unavailable'.
+      * Hard errors (insufficient_quota, invalid_api_key, ...) -> trip the
+        circuit breaker; subsequent calls go straight to the heuristic client
+        until ``cooldown_seconds`` have elapsed.
+      * Successful calls auto-close the breaker.
+    """
+
+    def __init__(
+        self,
+        primary: "LLMClient",
+        fallback: "LLMClient",
+        *,
+        max_attempts: int = 2,
+        cooldown_seconds: int = 600,
+    ) -> None:
+        self._primary = primary
+        self._fallback = fallback
+        self._max_attempts = max(1, max_attempts)
+        self._cooldown = cooldown_seconds
+        self._lock = threading.Lock()
+        self._open_until: float = 0.0
+        self._last_reason: str = ""
+
+    def diagnose(self, signal_payload: dict, log_excerpt: str) -> Diagnosis:
+        now = time.time()
+        with self._lock:
+            if now < self._open_until:
+                remaining = int(self._open_until - now)
+                return self._fallback_with_note(
+                    signal_payload,
+                    log_excerpt,
+                    f"LLM disabled for {remaining}s ({self._last_reason}).",
+                )
+
+        last_exc: Exception | None = None
+        for attempt in range(1, self._max_attempts + 1):
+            try:
+                return self._primary.diagnose(signal_payload, log_excerpt)
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                message = str(exc).lower()
+                if self._is_hard_failure(exc, message):
+                    self._trip(str(exc))
+                    log.error(
+                        "LLM provider returned a hard failure (%s); falling back to heuristics "
+                        "and pausing LLM calls for %ds.",
+                        exc.__class__.__name__,
+                        self._cooldown,
+                    )
+                    return self._fallback_with_note(
+                        signal_payload,
+                        log_excerpt,
+                        f"LLM hard failure: {exc.__class__.__name__}: {exc}",
+                    )
+                log.warning(
+                    "LLM call failed (attempt %d/%d): %s",
+                    attempt,
+                    self._max_attempts,
+                    exc,
+                )
+                if attempt < self._max_attempts:
+                    time.sleep(min(2 ** attempt, 5))
+
+        log.warning(
+            "LLM unavailable after %d attempts; using heuristic diagnosis. Last error: %s",
+            self._max_attempts,
+            last_exc,
+        )
+        return self._fallback_with_note(
+            signal_payload,
+            log_excerpt,
+            f"LLM unavailable: {last_exc!r}",
+        )
+
+    def _is_hard_failure(self, exc: Exception, message: str) -> bool:
+        if any(s in message for s in _HARD_FAIL_SUBSTRINGS):
+            return True
+        cls_name = exc.__class__.__name__
+        if cls_name in {"AuthenticationError", "PermissionDeniedError"}:
+            return True
+        if cls_name == "RateLimitError" and "insufficient_quota" in message:
+            return True
+        return False
+
+    def _trip(self, reason: str) -> None:
+        with self._lock:
+            self._open_until = time.time() + self._cooldown
+            self._last_reason = reason[:200]
+
+    def _fallback_with_note(
+        self,
+        signal_payload: dict,
+        log_excerpt: str,
+        note: str,
+    ) -> Diagnosis:
+        diag = self._fallback.diagnose(signal_payload, log_excerpt)
+        diag.explanation = (note + " " + diag.explanation).strip()
+        return diag
+
+
 class HeuristicClient:
     """Offline fallback that produces a sane default diagnosis."""
 
@@ -183,18 +300,42 @@ class HeuristicClient:
 # ---------------------------------------------------------------------------
 
 
-def build_llm_client(cfg: RuntimeConfig) -> LLMClient:
+def build_llm_client(cfg: RuntimeConfig, policy_cfg=None) -> LLMClient:
+    """Build the diagnoser.
+
+    Resolution order:
+      1. If a real LLM is configured -> ResilientLLMClient(primary, fallback)
+         where `fallback` is the PolicyEngine if available, else heuristic.
+      2. If LLM_PROVIDER=none and a PolicyEngine is available -> use it directly.
+      3. Otherwise -> HeuristicClient (the original baseline).
+    """
+    fallback: LLMClient
+    if policy_cfg is not None and policy_cfg.dependencies or (
+        policy_cfg is not None and policy_cfg.api_container
+    ):
+        from .policy import PolicyEngine  # local import to avoid cycle
+        fallback = PolicyEngine(policy_cfg)
+    else:
+        fallback = HeuristicClient()
+
     provider = cfg.llm_provider
     if provider == "openai" and cfg.openai_api_key:
-        return OpenAIClient(cfg.openai_api_key, cfg.openai_model)
+        return ResilientLLMClient(
+            primary=OpenAIClient(cfg.openai_api_key, cfg.openai_model),
+            fallback=fallback,
+        )
     if provider == "anthropic" and cfg.anthropic_api_key:
-        return AnthropicClient(cfg.anthropic_api_key, cfg.anthropic_model)
+        return ResilientLLMClient(
+            primary=AnthropicClient(cfg.anthropic_api_key, cfg.anthropic_model),
+            fallback=fallback,
+        )
     if provider != "none":
         log.warning(
-            "LLM provider '%s' requested but no API key configured; falling back to heuristic mode.",
+            "LLM provider '%s' requested but no API key configured; using "
+            "policy/heuristic mode instead.",
             provider,
         )
-    return HeuristicClient()
+    return fallback
 
 
 def _parse_diagnosis(content: str) -> Diagnosis:

@@ -49,7 +49,7 @@ class Agent:
         self.yaml_cfg = yaml_cfg
         self.buffer = LogBuffer(capacity=10_000)
         self.detector = Detector(yaml_cfg.detector)
-        self.llm: LLMClient = llm or build_llm_client(runtime)
+        self.llm: LLMClient = llm or build_llm_client(runtime, yaml_cfg.policy)
         self.jsonl_sink = JsonlSink("incidents.jsonl")
         self.slack_sink = SlackSink(runtime.slack_webhook_url) if runtime.slack_webhook_url else None
         self._cooldowns: dict[str, float] = {}
@@ -156,7 +156,10 @@ class Agent:
                 await asyncio.sleep(interval)
                 signals = self.detector.scan(self.buffer)
                 for signal in signals:
-                    await self._handle_signal(signal)
+                    try:
+                        await self._handle_signal(signal)
+                    except Exception:  # noqa: BLE001
+                        log.exception("handling signal %s failed", signal.kind)
             except asyncio.CancelledError:
                 break
             except Exception:  # noqa: BLE001

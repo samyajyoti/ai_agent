@@ -46,3 +46,58 @@ detector:
     - "deadlock detected"
     - "traceback"
     - "unhandled exception"
+
+# Rule-based diagnoser. Used when LLM_PROVIDER=none, and as the safety net
+# whenever the LLM is unavailable (quota, network, etc.).
+#
+# How it works: when a signal fires (health-check failure, error burst, ...),
+# the engine searches the failing subsystem names + log excerpt for the
+# keywords in each rule. The highest-scoring rule wins, and the agent
+# suggests/runs `restart_container` for that rule's container.
+policy:
+  api_container: demtest2-api          # <-- the container running the API
+  default_action: restart_api          # restart_api | notify_only
+
+  dependencies:
+    - label: RabbitMQ
+      container: demtest2-rabbitmq     # <-- change to your real container name
+      keywords:
+        - "rabbitmq"
+        - "amqp"
+        - "RabbitMQHealthCheck"
+        - "connection refused.*:5672"
+        - "pika\\.exceptions"
+
+    - label: Redis
+      container: demtest2-redis        # <-- change to your real container name
+      keywords:
+        - "redis"
+        - "Cache backend"
+        - "ECONNREFUSED.*:6379"
+        - "MISCONF"
+        - "READONLY You can't write"
+
+    - label: PostgreSQL
+      container: demtest2-postgres     # <-- change to your real container name
+      keywords:
+        - "postgres"
+        - "psycopg"
+        - "DatabaseBackend"
+        - "could not connect to server"
+        - "FATAL:.*database"
+        - "OperationalError"
+
+    - label: Disk
+      container: demtest2-api          # disk issues affect the API container itself
+      keywords:
+        - "DiskUsage"
+        - "no space left on device"
+        - "ENOSPC"
+
+    - label: Memory
+      container: demtest2-api
+      keywords:
+        - "MemoryUsage"
+        - "out of memory"
+        - "OOMKilled"
+        - "MemoryError"

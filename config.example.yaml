@@ -56,3 +56,18 @@ detector:
     - "database is not available"
     - "ECONNREFUSED"
     - "deadlock detected"
+
+# Optional: deterministic rule-based diagnoser. When LLM_PROVIDER=none, the
+# agent uses these rules to decide which container to restart on failure.
+# Also used as the safety-net fallback when the LLM is unavailable.
+policy:
+  api_container: insurance-api-dev
+  default_action: notify_only          # restart_api | notify_only
+  dependencies:
+    - label: Redis
+      container: insurance-redis
+      keywords: ["redis", "ECONNREFUSED.*:6379"]
+    # Add more rules per dependency, e.g.
+    # - label: RabbitMQ
+    #   container: insurance-rabbitmq
+    #   keywords: ["rabbitmq", "amqp", "RabbitMQHealthCheck"]
