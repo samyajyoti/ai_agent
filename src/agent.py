@@ -20,6 +20,7 @@ from .buffer import LogBuffer
 from .config import RuntimeConfig, YamlConfig
 from .detector import Detector, Signal
 from .health import HealthServer
+from .http_health import poll_http_health
 from .llm import Diagnosis, LLMClient, build_llm_client
 from .log_sources import LogEvent, tail_docker_container, tail_file
 from .notify import JsonlSink, SlackSink
@@ -75,6 +76,21 @@ class Agent:
                 self._consume(tail_file(src.name, src.path, src.kind, self._stop)),
                 name=f"file:{src.path}",
             ))
+        for src in self.yaml_cfg.sources.http_health:
+            tasks.append(asyncio.create_task(
+                self._consume(poll_http_health(
+                    name=src.name,
+                    url=src.url,
+                    interval_seconds=src.interval_seconds,
+                    timeout_seconds=src.timeout_seconds,
+                    expected_value=src.expected_value,
+                    method=src.method,
+                    verify_ssl=src.verify_ssl,
+                    headers=src.headers,
+                    stop_event=self._stop,
+                )),
+                name=f"http_health:{src.name}",
+            ))
         tasks.append(asyncio.create_task(self._scan_loop(), name="scan_loop"))
 
         if not tasks:
@@ -123,6 +139,7 @@ class Agent:
         table.add_row("Allowed actions", ", ".join(self.runtime.allowed_actions) or "-")
         table.add_row("Docker sources", str(len(self.yaml_cfg.sources.docker)))
         table.add_row("File sources", str(len(self.yaml_cfg.sources.files)))
+        table.add_row("HTTP health sources", str(len(self.yaml_cfg.sources.http_health)))
         console.print(Panel(table, title="AI Ops Agent", border_style="cyan"))
 
     async def _consume(self, async_iter) -> None:

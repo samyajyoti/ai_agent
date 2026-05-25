@@ -32,9 +32,29 @@ class FileSource(BaseModel):
     kind: Literal["nginx_access", "nginx_error", "api", "generic"] = "generic"
 
 
+class HttpHealthSource(BaseModel):
+    """Periodically poll an HTTP health-check endpoint.
+
+    The endpoint is expected to return JSON whose values are strings such as
+    ``"working"`` / ``"ok"`` / ``"healthy"``. Any value that does not match
+    ``expected_value`` (case-insensitive) is treated as a failed subsystem.
+    """
+
+    name: str
+    url: str
+    interval_seconds: int = 30
+    timeout_seconds: float = 10.0
+    expected_value: str = "working"
+    method: Literal["GET", "POST"] = "GET"
+    verify_ssl: bool = True
+    # Optional headers, e.g. Authorization for protected endpoints.
+    headers: dict[str, str] = Field(default_factory=dict)
+
+
 class Sources(BaseModel):
     docker: list[DockerSource] = Field(default_factory=list)
     files: list[FileSource] = Field(default_factory=list)
+    http_health: list[HttpHealthSource] = Field(default_factory=list)
 
 
 class DetectorConfig(BaseModel):

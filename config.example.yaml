@@ -20,6 +20,19 @@ sources:
       path: /var/log/nginx/error.log
       kind: nginx_error
 
+  # HTTP health-check endpoints. The agent expects each value in the JSON
+  # response to equal `expected_value` (case-insensitive). Anything else is
+  # treated as a failed subsystem and fires a critical signal immediately.
+  http_health:
+    - name: example-health
+      url: https://example.com/getHealth/
+      interval_seconds: 30
+      timeout_seconds: 10
+      expected_value: working
+      verify_ssl: true
+      # headers:
+      #   Authorization: "Bearer ${API_TOKEN}"
+
 # Anomaly detection thresholds. Tune for your traffic profile.
 detector:
   # Rolling window length in seconds used for rate calculations.

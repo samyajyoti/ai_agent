@@ -57,6 +57,7 @@ class Detector:
         signals.extend(self._check_critical_patterns(events))
         signals.extend(self._check_nginx(events))
         signals.extend(self._check_api_errors(events))
+        signals.extend(self._check_http_health(events))
         return signals
 
     # ------------------------------------------------------------------
@@ -150,6 +151,53 @@ class Detector:
                         },
                     )
                 )
+        return signals
+
+    def _check_http_health(self, events: Iterable[LogEvent]) -> list[Signal]:
+        """Fire one signal per (source, failing subsystem set) seen in the window."""
+        by_key: dict[tuple[str, frozenset[str]], list[LogEvent]] = {}
+        for ev in events:
+            if ev.kind != "http_health" or not ev.parsed.get("health_failure"):
+                continue
+            failing = ev.parsed.get("failing") or {}
+            if isinstance(failing, dict) and failing:
+                key = (ev.source, frozenset(failing.keys()))
+            else:
+                reason = ev.parsed.get("reason", "unknown")
+                key = (ev.source, frozenset({f"_reason:{reason}"}))
+            by_key.setdefault(key, []).append(ev)
+
+        signals: list[Signal] = []
+        for (source, key_set), evs in by_key.items():
+            last = evs[-1]
+            failing = last.parsed.get("failing") or {}
+            reason = last.parsed.get("reason", "subsystem_failure")
+            url = last.parsed.get("url", "")
+            if failing:
+                title = (
+                    f"Health endpoint failing: {', '.join(sorted(failing.keys()))}"
+                )
+                desc = (
+                    f"{source}: {len(evs)} failed scrape(s) of {url} in the last "
+                    f"{self.config.window_seconds}s. Failing subsystems: "
+                    + ", ".join(f"{k}={v!r}" for k, v in failing.items())
+                )
+            else:
+                title = f"Health endpoint unreachable ({reason})"
+                desc = (
+                    f"{source}: {len(evs)} failure(s) scraping {url} "
+                    f"({reason}) in the last {self.config.window_seconds}s."
+                )
+            signals.append(
+                Signal(
+                    kind="http_health_failure",
+                    title=title,
+                    description=desc,
+                    severity="critical",
+                    sample_events=evs[-5:],
+                    metrics={"failures": float(len(evs))},
+                )
+            )
         return signals
 
     def _check_api_errors(self, events: Iterable[LogEvent]) -> list[Signal]:

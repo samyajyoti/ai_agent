@@ -1,0 +1,48 @@
+# Config preset for the demtest2 / testodsy stack.
+#
+# Usage:
+#   cp config.demtest2.yaml config.yaml
+#   $EDITOR config.yaml    # set the docker container name to match your host
+#   python run.py run
+#
+# What this monitors:
+#   1. The HTTP health endpoint at https://testodsy.wrtual.in/getHealth/
+#      — fires immediately if any subsystem != "working", or if the endpoint
+#      times out / returns non-2xx / returns malformed JSON.
+#   2. The Nginx access log at /var/log/nginx/demtest2/accessapi.log
+#      — fires on 5xx spikes and high p95 latency.
+#   3. Docker container logs for the API container
+#      — fires on error bursts and critical patterns (panic, OOM, traceback…).
+
+sources:
+  http_health:
+    - name: testodsy-health
+      url: https://testodsy.wrtual.in/getHealth/
+      interval_seconds: 30
+      timeout_seconds: 10
+      expected_value: working
+      verify_ssl: true
+
+  docker:
+    - name: demtest2-api
+      container: demtest2-api      # <-- change to the real container name
+      kind: api                    # api | nginx | generic
+
+  files:
+    - name: nginx-access
+      path: /var/log/nginx/demtest2/accessapi.log
+      kind: nginx_access
+
+detector:
+  window_seconds: 60
+  nginx_5xx_rate_threshold: 0.05
+  api_error_count_threshold: 10
+  nginx_p95_latency_seconds: 2.5
+  critical_patterns:
+    - "panic"
+    - "out of memory"
+    - "segmentation fault"
+    - "ECONNREFUSED"
+    - "deadlock detected"
+    - "traceback"
+    - "unhandled exception"

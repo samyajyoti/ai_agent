@@ -132,6 +132,11 @@ sources:
   files:
     - { name: nginx-access, path: /var/log/nginx/access.log, kind: nginx_access }
     - { name: nginx-error, path: /var/log/nginx/error.log,  kind: nginx_error  }
+  http_health:
+    - name: testodsy-health
+      url: https://testodsy.wrtual.in/getHealth/
+      interval_seconds: 30
+      expected_value: working
 
 detector:
   window_seconds: 60
