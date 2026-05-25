@@ -15,6 +15,25 @@ notify).
 Everything is **dry-run by default**. Nothing destructive happens until you
 explicitly turn it on per action.
 
+## Monitor just one app (simplest setup)
+
+```bash
+cd ai-agent
+cp .env.example .env                          # add your OPENAI_API_KEY
+cp config.single-app.yaml config.yaml         # edit `container:` to your app
+docker ps --format '{{.Names}}'               # find the exact container name
+
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python run.py run
+```
+
+That's it. The agent will tail one container, run the detector + LLM on its
+log stream, and write incidents to `incidents.jsonl`. Add more sources later
+by editing `config.yaml` — nothing else changes.
+
+---
+
 ## Quick start (local)
 
 ```bash

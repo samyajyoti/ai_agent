@@ -1,0 +1,29 @@
+# Minimal single-app config.
+# Copy to config.yaml, then change `container:` to your app's container name.
+#
+#   cp config.single-app.yaml config.yaml
+#   docker ps --format '{{.Names}}'   # find the right container name
+#   $EDITOR config.yaml               # set `container:`
+#
+# That's it. Run:
+#   python run.py run        # locally
+#   docker compose up -d     # as a sidecar
+
+sources:
+  docker:
+    - name: my-app
+      container: insurance-api-dev   # <-- change me
+      kind: api                      # api | nginx | generic
+  files: []                          # leave empty if you don't have nginx logs yet
+
+detector:
+  window_seconds: 60
+  nginx_5xx_rate_threshold: 0.05
+  api_error_count_threshold: 10
+  nginx_p95_latency_seconds: 2.5
+  critical_patterns:
+    - "panic"
+    - "out of memory"
+    - "ECONNREFUSED"
+    - "unhandled"
+    - "traceback"
