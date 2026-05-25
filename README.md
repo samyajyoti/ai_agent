@@ -166,6 +166,54 @@ python run.py analyze     # one-shot diagnose a log file
 python run.py self-test   # validate config + connectivity
 ```
 
+## Troubleshooting
+
+### `PermissionError(13, 'Permission denied')` on the Docker socket
+
+The agent process can see `/var/run/docker.sock` but can't open it. The Docker
+socket on the host is `root:docker` (mode 660), and the group id varies per
+distro (Debian 999, Ubuntu 998, RHEL 994, Docker Desktop different again).
+
+**In a container** (this repo's `compose.yml` / `Dockerfile`):
+the entrypoint auto-detects the socket's gid and adds the unprivileged
+`agent` user to a group with that gid before starting Python. If you still
+see the error:
+
+```bash
+docker compose down
+docker compose build --no-cache
+docker compose up -d
+docker exec ai-ops-agent id agent     # should list a group with the host docker gid
+```
+
+**Locally on Linux**: add yourself to the `docker` group and re-login:
+
+```bash
+sudo usermod -aG docker "$USER"
+newgrp docker     # or log out and back in
+```
+
+**Locally on macOS**: ensure Docker Desktop is running. The agent talks to it
+via `/var/run/docker.sock`, which Docker Desktop exposes once the app is up.
+
+### Nginx file source shows no events
+
+The path must be readable *inside the agent container*. In `compose.yml`
+uncomment the bind-mount, e.g.:
+
+```yaml
+volumes:
+  - /var/log/nginx:/var/log/nginx:ro
+```
+
+### HTTP health source reports `non_json` or `transport_error`
+
+- `non_json`: the endpoint returned HTML or text. Make sure the URL really
+  returns JSON (open it in a browser or `curl -i`).
+- `transport_error`: DNS, TLS or network problem. If the endpoint uses a
+  self-signed certificate, set `verify_ssl: false` on that source.
+- Behind auth? Add headers under that source's `headers:` block.
+
 ## Limitations
 
 - The agent reasons over a rolling window in memory; it is not a metrics

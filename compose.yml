@@ -29,13 +29,20 @@ services:
       # Optional: bind-mount nginx logs from the host for file-based tails.
       # - /var/log/nginx:/var/log/nginx:ro
     restart: unless-stopped
-    read_only: true
+    # NOTE: read_only rootfs is intentionally disabled because the entrypoint
+    # writes to /etc/group at startup to grant the unprivileged `agent` user
+    # access to the Docker socket. We keep the other hardening below.
     tmpfs:
       - /tmp
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8787/health"]
       interval: 30s
